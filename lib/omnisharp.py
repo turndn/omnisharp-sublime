@@ -14,6 +14,8 @@ import codecs
 from .helpers import *
 from .urllib3 import PoolManager
 
+pool = PoolManager(headers={'Content-Type': 'application/json; charset=UTF-8'})
+
 IS_EXTERNAL_SERVER_ENABLE = False
 
 launcher_procs = {
@@ -22,7 +24,91 @@ launcher_procs = {
 server_ports = {
 }
 
-pool = PoolManager(headers={'Content-Type': 'application/json; charset=UTF-8'})
+
+def execute_command(command, callback=None):
+    """Takes a synchronous method and executes it asynchronously.
+    :param command: The synchronous method
+    :param callback: The optional callback executed upon completion.
+    :return: nothing
+    """
+    thread = AsyncWrapper(command, callback)
+    thread.start()
+
+
+class AsyncWrapper(threading.Thread):
+    def __init__(self, function, callback):
+        super().__init__()
+        self.callback = callback
+        self.function = function
+
+    def run(self):
+        result = self.function()
+
+        if self.callback is not None:
+            self.callback(result)
+
+
+class Request(object):
+    """A Request object is used to make a request to the omnisharp server
+    """
+
+    def __init__(self, view, endpoint: str, params, timeout: int):
+        """
+        :param view: The active SublimeText view. The active view is used to find the correct omnisharp server.
+        :param endpoint: The url that the request will be made to.
+        :param params: Any parameters that need to be added to the request.
+        :param timeout: The duration at which the request will fail
+        """
+        solution_path = current_solution_filepath_or_project_rootpath(view)
+
+        print('solution path: %s' % solution_path)
+
+        assert solution_path is not None
+        assert solution_path in server_ports
+
+        location = view.sel()[0]
+        cursor = view.rowcol(location.begin())
+
+        parameters = {}
+        parameters['line'] = str(cursor[0] + 1)
+        parameters['column'] = str(cursor[1] + 1)
+        parameters['buffer'] = view.substr(sublime.Region(0, view.size()))
+        parameters['filename'] = view.file_name()
+
+        if params is not None:
+            parameters.update(params)
+
+        if timeout is None:
+            self.timeout = int(get_settings(view, 'omnisharp_response_timeout'))
+
+        host = 'localhost'
+        port = server_ports[solution_path]
+
+        self.url = "http://%s:%s%s" % (host, port, endpoint)
+        self.data = json.dumps(parameters)
+
+    def request(self):
+        """Executes the request, and returns the response.
+        """
+        print('======== request ======== \n Url: %s \n Data: %s' % (self.url, self.data))
+        response = pool.urlopen('POST', self.url, body=self.data, timeout=self.timeout).data
+
+        if not response:
+            print('======== response ======== \n response is empty')
+            print('======== end ========')
+            return None
+        else:
+            if response.startswith(codecs.BOM_UTF8):
+                decodeddata = response.decode('utf-8-sig')
+            else:
+                decodeddata = response.decode('utf-8')
+
+            print('======== response ======== \n %s' % decodeddata)
+            print('======== end ========')
+            return json.loads(decodeddata)
+
+
+"""
 
 readycount = 0
 
@@ -214,3 +300,4 @@ def alive_status_handler(data):
     elif data == True:
         set_omnisharp_status("Server Running")
         sublime.set_timeout(lambda: check_server_alive_status(sublime.active_window().active_view()), 5000)
+"""
